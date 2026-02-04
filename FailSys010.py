@@ -13,13 +13,10 @@
 # 
 # ************************************************************************************************************
 
-
-
 # メモ
 # まだできていないこと
 # 動作テスト
-# 使い方の説明文
-
+# このツールはどこで自動実行させるか（動作環境）
 
 import sys
 import os
@@ -31,7 +28,8 @@ import csv
 import logging
 import subprocess
 import msal                                         # Microsoft Authentication Library
-from pprint import pprint
+from pprint  import pprint
+from pathlib import Path
 
 # 共通関数
 import Common.ComDefine as ComDefine                # グローバル変数の定義
@@ -94,7 +92,10 @@ class PROC_HEAD:
         try:
             retbln = False
 
-            handler   = logging.FileHandler(r'.\log\production.log', mode="w", encoding='utf-8')
+            # ログファイルのパス
+            ComDefine.log_file = fr'{Path(__file__).resolve().parent}\log\production.log'
+
+            handler   = logging.FileHandler(ComDefine.log_file, mode="w", encoding='utf-8')
             formatter = logging.Formatter('%(asctime)s %(levelname)s [%(funcName)s]: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
             handler.setFormatter(formatter)
@@ -206,7 +207,7 @@ class PROC_HEAD:
             # 直近のタイムスタンプの１ファイルを取得
             ComDefine.csv_file = max(csv_list, key=os.path.getmtime)
 
-            logger.info(f"「{ComDefine.csv_file}」が最新のファイルです。")
+            logger.info(f"「{ComDefine.csv_file}」が最新のタイムスタンプです。")
 
             # 空ファイルチェック
             if os.path.getsize(ComDefine.csv_file) == 0:
@@ -250,7 +251,7 @@ class PROC_HEAD:
     def check_csv_row(csv_file):
         try:
             retbln = False
-            with open(csv_file, newline="", encoding="utf-8") as file:
+            with open(csv_file, newline = "", encoding = "utf-8") as file:
                 reader = csv.reader(file)
                 header = next(reader)
 
@@ -274,7 +275,143 @@ class PROC_HEAD:
             else:
                 logger.info("----- 処理が正常に終了しました。 -----")
 
-            subprocess.Popen(["notepad.exe", r".\log\production.log"])
+            subprocess.Popen(["notepad.exe", ComDefine.log_file])
+            retbln = True
+
+        except Exception as e:
+            msg_err = f"「{__class__.__name__}.{inspect.currentframe().f_code.co_name}で" + "エラーが発生しました。 " + "エラー内容 ： " + f"{e}」"
+            logger.exception(msg_err)
+            traceback.print_exc()
+        finally:
+            return retbln
+
+# ----------------------------------------------------------------------------------------
+# CSVファイルの加工処理
+# ----------------------------------------------------------------------------------------
+class PROC_CSVSYORI():
+
+    # CSVファイルから改行コードを削除する
+    def update_csv():
+        try:
+            retbln = False
+
+            input_csv = ComDefine.csv_file
+            output_csv = DICT_INI["FILE_INFO"]["DOWNLOAD_PATH"] + "\\" + DICT_INI["FILE_INFO"]["CSV_FILE"]
+
+            # w:同名ファイルは上書き
+            with open(input_csv, newline = "", encoding = "utf-8") as infile, \
+                    open(output_csv, "w", newline = "", encoding = "utf-8") as outfile:
+            
+                    reader = csv.reader(infile)
+                    writer = csv.writer(outfile, quoting = csv.QUOTE_ALL)
+
+                    # 既存のヘッダーは書き込まない
+                    next(reader, None)
+                    
+                    # カラム統一後のヘッダー
+                    output_header = ["ID","ユーザー名","ユーザーキー","施設名","内容","現象／原因","処置","備考","連絡受付日"]
+                    writer.writerow(output_header)
+
+                    for row in reader:
+
+                        replaced_row = []
+
+                        for cell in row:
+                            replaced_cell = cell.replace("\r\n", "").replace("\n", "").replace("\r", "")
+                            replaced_row.append(replaced_cell)
+
+                        # ユーザー名 ＋ エンドユーザー → ユーザー名に統一
+                        user_name = replaced_row[1].strip() or replaced_row[2].strip()
+
+                        # 施設名 ＋ 機場 → 施設名に統一
+                        shisetu_name = replaced_row[5].strip() or replaced_row[6].strip()
+
+                        replaced_row_new = [replaced_row[0],            # ID
+                                            user_name,                  # ユーザー名
+                                            replaced_row[3],            # ユーザーキー
+                                            shisetu_name,               # 施設名
+                                            *replaced_row[6:]]          # 以降・・・
+
+                        writer.writerow(replaced_row_new)
+
+            logger.info(f"最新のCSVファイルから改行を削除して「{output_csv}」を作成しました。")
+            retbln = True
+
+        except Exception as e:
+            msg_err = f"「{__class__.__name__}.{inspect.currentframe().f_code.co_name}で" + "エラーが発生しました。 " + "エラー内容 ： " + f"{e}」"
+            logger.exception(msg_err)
+            traceback.print_exc()
+        finally:
+            return retbln
+        
+    # CSVファイルから改行コードを削除する（データ件数によりファイルを分割して作成する）：未検証
+    def update_csv2():
+        try:
+            retbln = False
+
+            input_csv = ComDefine.csv_file
+            download_path = DICT_INI["FILE_INFO"]["DOWNLOAD_PATH"]
+            csv_file_name = DICT_INI["FILE_INFO"]["CSV_FILE"]
+
+            MAX_ROWS = 200
+            cnt = 1
+            row_count = 0
+
+            outfile = None
+            writer = None
+
+            with open(input_csv, newline = "", encoding = "utf-8") as infile:
+                reader = csv.reader(infile)
+
+                # 既存ヘッダーは読み飛ばす
+                next(reader, None)
+
+                for row in reader:
+
+                    # {MAX_ROWS}件ごとに新しいファイルを作成
+                    if row_count % MAX_ROWS == 0:
+
+                        if outfile: outfile.close()
+                            
+                        output_csv = download_path + "\\" + f"{cnt:02d}" + csv_file_name
+                        outfile = open(output_csv, "w", newline = "", encoding = "utf-8")
+
+                        writer = csv.writer(outfile, quoting = csv.QUOTE_ALL)
+
+                        # カラム統一後のヘッダー
+                        output_header = ["ID","ユーザー名","ユーザーキー","施設名","内容","現象／原因","処置","備考","連絡受付日"]
+                            
+                        writer.writerow(output_header)
+
+                        cnt += 1
+
+                    # 改行コード削除
+                    replaced_row = [
+                        cell.replace("\r\n", "").replace("\n", "").replace("\r", "")
+                        for cell in row
+                    ]
+
+                    # ユーザー名 ＋ エンドユーザー → ユーザー名
+                    user_name = replaced_row[1].strip() or replaced_row[2].strip()
+
+                    # 施設名 ＋ 機場 → 施設名
+                    shisetu_name = replaced_row[5].strip() or replaced_row[6].strip()
+
+                    replaced_row_new = [
+                        replaced_row[0],    # ID
+                        user_name,          # ユーザー名
+                        replaced_row[3],    # ユーザーキー
+                        shisetu_name,       # 施設名
+                        *replaced_row[6:]   # 以降
+                    ]
+
+                    writer.writerow(replaced_row_new)
+                    row_count += 1
+
+            # 最後のファイルをクローズ
+            if outfile: outfile.close()
+                
+            logger.info(f"最新のCSVファイルから改行を削除して「{output_csv}」を作成しました。")
             retbln = True
 
         except Exception as e:
@@ -386,10 +523,12 @@ class PROC_SHAREPOINT():
             
         try:
             retbln = False
-            logger.info(f"「{ComDefine.csv_file}」がSharePointへのアップロード元ファイルです。")
-            
+
+            up_path = DICT_INI["FILE_INFO"]["DOWNLOAD_PATH"]
+            up_file = DICT_INI["FILE_INFO"]["CSV_FILE"]
+
             # SharePointへのアップロード
-            ret = self.clsMsGraph.sys_sharepoint_upload_file(ComDefine.folder_id, ComDefine.csv_file, "障害データ.csv")
+            ret = self.clsMsGraph.sys_sharepoint_upload_file(ComDefine.folder_id, up_path + "\\" + up_file, up_file)
             sub_rtn = ret[0]
 
             if not sub_rtn:
@@ -397,7 +536,7 @@ class PROC_SHAREPOINT():
                 logger.error(ret[1])
                 return retbln
 
-            logger.info(f"SharePointに「障害データ.csv」をアップロードしました。")
+            logger.info(f"SharePointに「{up_file}]をアップロードしました。")
 
             retbln = True
 
@@ -441,7 +580,6 @@ class PROC_SHAREPOINT():
 logger = logging.getLogger(__name__)
 
 def main():
-
     try:
         retbln = False
 
@@ -455,25 +593,32 @@ def main():
         # INIファイルの読み込み
         if not PROC_HEAD.get_ini(): raise
 
-        # CSVファイルの存在チェック
-        if not PROC_HEAD.check_csv(): raise
+        if ret_check_argv[1] in ("csv", "up"):
 
-        if ret_check_argv[1] == "csv": return retbln
-            
-        proc = PROC_SHAREPOINT()
+            # CSVファイルの存在チェック
+            if not PROC_HEAD.check_csv(): raise
 
-        # SharePointへのアクセス処理
-        if not proc.get_folder_id(): raise
+            # CSVファイルから改行コードを削除する
+            if not PROC_CSVSYORI.update_csv(): raise
 
+        if ret_check_argv[1] in ("up", "down"):
+
+            proc = PROC_SHAREPOINT()
+
+            # SharePointへのアクセス処理
+            if not proc.get_folder_id(): raise
+        
         match ret_check_argv[1]:
             case "up":
+
                 # SharePointのファイル削除
                 if not proc.delete_files(): raise
 
                 # SharePointへのアップロード
                 if not proc.upload_file(): raise
-
+        
             case "down":
+
                 # SharePointからのダウンロード
                 if not proc.download_file(): raise
 
