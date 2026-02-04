@@ -7,3 +7,4 @@
 
 csv_file  = ""                              # 楽楽販売からダウンロードしたCSVファイル名（パス付）
 folder_id = ""                              # SharePointのフォルダーID
+log_file  = ""                              # production.logのファイル名（絶対パス付）
