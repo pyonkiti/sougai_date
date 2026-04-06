@@ -12,12 +12,6 @@
 #   変更履歴
 # 
 # ************************************************************************************************************
-
-# メモ
-# まだできていないこと
-# 動作テスト
-# このツールはどこで自動実行させるか（動作環境）
-
 import sys
 import os
 import configparser
@@ -28,8 +22,9 @@ import csv
 import logging
 import subprocess
 import msal                                         # Microsoft Authentication Library
-from pprint  import pprint
-from pathlib import Path
+from pprint   import pprint
+from pathlib  import Path
+from openpyxl import Workbook
 
 # 共通関数
 import Common.ComDefine as ComDefine                # グローバル変数の定義
@@ -48,7 +43,8 @@ DICT_INI = {
     "FILE_INFO"  :                                  # CSVファイル関連
         {"CSV_FILES"       : "",                    # CSVファイルのローカルのアップロード元パス
          "DOWNLOAD_PATH"   : "",                    # CSVファイルのローカルのダウンロード先パス
-         "CSV_FILE"        : ""}                    # SharePointに保存されるCSVファイル名
+         "CSV_FILE"        : "",                    # SharePointに保存されるCSVファイル名
+         "EXCEL_FILE"      : ""}                    # SharePointに保存されるEXCELファイル名
 }
 
 # ----------------------------------------------------------------------------------------
@@ -69,7 +65,7 @@ class PROC_HEAD:
             case 2:
                 pass
             case _:
-                logger.error("引数に値が２個以上設定されています。引数の値は１個しか設定できません。")
+                logger.error("引数の値が２個以上設定されています。引数の値は１個しか設定できません。")
                 return retbln, ret
 
         # 入力できる引数の一覧
@@ -79,6 +75,8 @@ class PROC_HEAD:
             ret = "down"
         elif argv[-1].lower() in ["c", "csv"]:
             ret = "csv"
+        elif argv[-1].lower() in ["e", "excel"]:
+            ret = "excel"
         else:
             logger.error("引数の値の指定に誤りがあります。")
             return retbln, ret
@@ -95,7 +93,7 @@ class PROC_HEAD:
             # ログファイルのパス
             ComDefine.log_file = fr'{Path(__file__).resolve().parent}\log\production.log'
 
-            handler   = logging.FileHandler(ComDefine.log_file, mode="w", encoding='utf-8')
+            handler   = logging.FileHandler(ComDefine.log_file, mode = "w", encoding = 'utf-8')
             formatter = logging.Formatter('%(asctime)s %(levelname)s [%(funcName)s]: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
             handler.setFormatter(formatter)
@@ -116,56 +114,38 @@ class PROC_HEAD:
     # INIファイルの読み込み
     def get_ini():
 
-        # INIファイルの読み込みチェック
-        def check_ini(ini_filepath):
-            
-            try:
-                retbln = False
-                
-                # INIファイルの存在チェック
-                if not os.path.exists(ini_filepath):
-                    logger.error("SYSTEM.INIファイルが存在しません。")
-                    return retbln
-                    
-                config = configparser.ConfigParser()
-                config.read(ini_filepath, encoding="utf-8")
-
-                # dictを読み込む
-                for key, value in DICT_INI.items():
-
-                    # INIファイル内のセクションの存在チェック
-                    if not config.has_section(key):
-                        logger.error("[SHARE_INFO]セクションが存在しません。")
-                        return retbln
-                
-                    # 入れ子のdictを読み込む
-                    for key_key in value:
-
-                        # INIファイル内のセクションに属する全オプションの存在チェック
-                        if not config.has_option(key, key_key):
-                            logger.error(f"{key_key} オプションが存在しません。")
-                            return retbln
-                
-                retbln = True
-
-            except Exception as e:
-                msg_err = f"「{__class__.__name__}.{inspect.currentframe().f_code.co_name}で" + "エラーが発生しました。 " + "エラー内容 ： " + f"{e}」"
-                logger.exception(msg_err)
-                traceback.print_exc()
-            finally:
-                return retbln
-        
         try:
             retbln = False
             ini_filepath = f"{os.path.dirname(__file__)}" + "\\Common\\" + "SYSTEM.INI"
 
-            # INIファイルのチェック
-            if not check_ini(ini_filepath):
+            # INIファイルの存在チェック
+            if not os.path.exists(ini_filepath):
+                logger.error("SYSTEM.INIファイルが存在しません。")
                 return retbln
             
             # INIファイルの読み込み
             config = configparser.ConfigParser()
-            config.read(ini_filepath, encoding="utf-8")
+            config.read(ini_filepath, encoding = "utf-8")
+
+            # dictを読み込む
+            for key, value in DICT_INI.items():
+
+                # INIファイル内のセクションの存在チェック
+                if not config.has_section(key):
+                    logger.error("[SHARE_INFO]セクションが存在しません。")
+                    return retbln
+            
+                # dictの入れ子dictを読み込む
+                for key_key in value:
+
+                    # INIファイル内のセクションに属する全オプションの存在チェック
+                    if not config.has_option(key, key_key):
+                        logger.error(f"{key_key} オプションが存在しません。")
+                        return retbln
+
+            # INIファイルの読み込み
+            config = configparser.ConfigParser()
+            config.read(ini_filepath, encoding = "utf-8")
             
             logger.info(f"「{ini_filepath}」ファイルを読み込みました。")
 
@@ -179,6 +159,7 @@ class PROC_HEAD:
             DICT_INI["FILE_INFO"]["CSV_FILES"]        = config.get('FILE_INFO', 'CSV_FILES')           # CSVファイルのローカルのアップロード元パス
             DICT_INI["FILE_INFO"]["DOWNLOAD_PATH"]    = config.get('FILE_INFO', 'DOWNLOAD_PATH')       # CSVファイルのローカルのダウンロード先パス
             DICT_INI["FILE_INFO"]["CSV_FILE"]         = config.get('FILE_INFO', 'CSV_FILE')            # SharePointに保存されるCSVファイル名
+            DICT_INI["FILE_INFO"]["EXCEL_FILE"]       = config.get('FILE_INFO', 'EXCEL_FILE')          # SharePointに保存されるEXCELファイル名
             
             retbln = True
 
@@ -194,18 +175,19 @@ class PROC_HEAD:
 
         try:
             retbln = False
-
             csv_list  = glob.glob(DICT_INI["FILE_INFO"]["CSV_FILES"])
 
             # CSVファイルの存在チェック
             if not csv_list:
-                logger.error("INIファイルに指定したフォルダに障害データのCSVファイルが存在しません。")
+
+                csv_files = os.path.basename(DICT_INI["FILE_INFO"]["CSV_FILES"])
+                logger.error(f"取り込み元のCSVファイル「{csv_files}」が１件も存在しません。")
                 return retbln
             
             logger.info(f"「{DICT_INI["FILE_INFO"]["CSV_FILES"]}」のファイルは{len(csv_list)}個存在しています。")
 
             # 直近のタイムスタンプの１ファイルを取得
-            ComDefine.csv_file = max(csv_list, key=os.path.getmtime)
+            ComDefine.csv_file = max(csv_list, key = os.path.getmtime)
 
             logger.info(f"「{ComDefine.csv_file}」が最新のタイムスタンプです。")
 
@@ -216,7 +198,7 @@ class PROC_HEAD:
             
             # CSVファイルの文字コードチェック
             if not PROC_HEAD.check_fille_utf(ComDefine.csv_file):
-                logger.error("障害データのCSVファイルはUTF-8で作成してください。")
+                logger.error("障害データのCSVファイルがUTF-8以外で作成されています。")
                 return retbln
 
             # CSVファイルのヘッダのカラム数チェック
@@ -255,7 +237,7 @@ class PROC_HEAD:
                 reader = csv.reader(file)
                 header = next(reader)
 
-                if not len(header) == 11:
+                if not len(header) == 9:
                     return retbln
                 
             retbln = True
@@ -290,8 +272,32 @@ class PROC_HEAD:
 # ----------------------------------------------------------------------------------------
 class PROC_CSVSYORI():
 
-    # CSVファイルから改行コードを削除する
+    # CSVファイル名を変更
     def update_csv():
+        try:
+            retbln = False
+
+            input_csv = ComDefine.csv_file
+            output_csv = DICT_INI["FILE_INFO"]["DOWNLOAD_PATH"] + "\\" + DICT_INI["FILE_INFO"]["CSV_FILE"]
+
+            # コピー先のCSVファイルを削除
+            if os.path.exists(output_csv): os.remove(output_csv)
+            
+            # CSVファイルをリネーム
+            os.rename(input_csv, output_csv)
+
+            logger.info(f"「{input_csv}」を「{output_csv}」にリネームしました。")
+            retbln = True
+
+        except Exception as e:
+            msg_err = f"「{__class__.__name__}.{inspect.currentframe().f_code.co_name}で" + "エラーが発生しました。 " + "エラー内容 ： " + f"{e}」"
+            logger.exception(msg_err)
+            traceback.print_exc()
+        finally:
+            return retbln
+
+    # CSVファイルから改行コードを削除する（没：未使用）
+    def update_csv3():
         try:
             retbln = False
 
@@ -301,7 +307,7 @@ class PROC_CSVSYORI():
             # w:同名ファイルは上書き
             with open(input_csv, newline = "", encoding = "utf-8") as infile, \
                     open(output_csv, "w", newline = "", encoding = "utf-8") as outfile:
-            
+
                     reader = csv.reader(infile)
                     writer = csv.writer(outfile, quoting = csv.QUOTE_ALL)
 
@@ -324,7 +330,7 @@ class PROC_CSVSYORI():
                         user_name = replaced_row[1].strip() or replaced_row[2].strip()
 
                         # 施設名 ＋ 機場 → 施設名に統一
-                        shisetu_name = replaced_row[5].strip() or replaced_row[6].strip()
+                        shisetu_name = replaced_row[4].strip() or replaced_row[5].strip()
 
                         replaced_row_new = [replaced_row[0],            # ID
                                             user_name,                  # ユーザー名
@@ -344,7 +350,7 @@ class PROC_CSVSYORI():
         finally:
             return retbln
         
-    # CSVファイルから改行コードを削除する（データ件数によりファイルを分割して作成する）：未検証
+    # CSVファイルから改行コードを削除する（データ件数によりファイルを分割して作成する）：未検証：未使用
     def update_csv2():
         try:
             retbln = False
@@ -395,7 +401,7 @@ class PROC_CSVSYORI():
                     user_name = replaced_row[1].strip() or replaced_row[2].strip()
 
                     # 施設名 ＋ 機場 → 施設名
-                    shisetu_name = replaced_row[5].strip() or replaced_row[6].strip()
+                    shisetu_name = replaced_row[4].strip() or replaced_row[5].strip()
 
                     replaced_row_new = [
                         replaced_row[0],    # ID
@@ -421,6 +427,52 @@ class PROC_CSVSYORI():
         finally:
             return retbln
 
+# ----------------------------------------------------------------------------------------
+# Excelファイルの加工処理
+# ----------------------------------------------------------------------------------------
+class PROC_EXCELSYORI():
+
+    # CSVファイルをExcelファイルに書き込む
+    def create_excel():
+
+        try:
+            retbln = False
+
+            csv_path = DICT_INI["FILE_INFO"]["DOWNLOAD_PATH"] + "\\" + DICT_INI["FILE_INFO"]["CSV_FILE"]
+            excel_path = DICT_INI["FILE_INFO"]["DOWNLOAD_PATH"] + "\\" + DICT_INI["FILE_INFO"]["EXCEL_FILE"]
+
+            # CSVファイルの存在チェック
+            if not os.path.exists(csv_path):
+                logger.error(f"{csv_path}ファイルが存在しません。")
+                return retbln
+
+            # Excelファイルを削除
+            if os.path.exists(excel_path): os.remove(excel_path)
+
+            # Excelブックを作成
+            wb = Workbook()
+            ws = wb.active
+            ws.title = Path(excel_path).stem
+
+            # CSVファイルをExcelファイルに書き込む
+            with open(csv_path, newline = "", encoding = "utf-8") as f:
+                for row in csv.reader(f):
+                    ws.append(row)
+
+            # Excelブックを書き込む
+            wb.save(excel_path)
+
+            logger.info(f"「{DICT_INI["FILE_INFO"]["DOWNLOAD_PATH"]}」にある{DICT_INI["FILE_INFO"]["CSV_FILE"]}を「{DICT_INI["FILE_INFO"]["EXCEL_FILE"]}」に変換しました。")
+
+            retbln = True
+
+        except Exception as e:
+            msg_err = f"「{__class__.__name__}.{inspect.currentframe().f_code.co_name}で" + "エラーが発生しました。 " + "エラー内容 ： " + f"{e}」"
+            logger.exception(msg_err)
+            traceback.print_exc()
+        finally:
+            return retbln
+        
 # ----------------------------------------------------------------------------------------
 # SharePointへのアクセス処理
 # ----------------------------------------------------------------------------------------
@@ -450,11 +502,11 @@ class PROC_SHAREPOINT():
                 return retbln
                 
             logger.info("SharePointへの接続の認証に成功しました。")
-
+        
             # SharePointのfolder id を取得
             ret = self.clsMsGraph.sys_sharepoint_get_folder_id(DICT_INI["SHARE_INFO"]["LM_PATH"])
             ComDefine.folder_id = ret[0]
-
+        
             if ComDefine.folder_id == None: 
                 logger.error("SharePointのフォルダーIDの取得に失敗しました。")
                 logger.error(ret[1])
@@ -490,7 +542,7 @@ class PROC_SHAREPOINT():
                 logger.info(f"SharePointの中の{DICT_INI["SHARE_INFO"]["LM_PATH"]}フォルダはもともと空です。")
             else:
                 logger.info(f"SharePointの{DICT_INI["SHARE_INFO"]["LM_PATH"]}フォルダには{len(file_list['value'])}個のファイルが存在していました。")
-
+                
                 for cnt, file_info in enumerate(file_list['value'], start = 1):
                     
                     # ファイル以外は除外
@@ -525,7 +577,7 @@ class PROC_SHAREPOINT():
             retbln = False
 
             up_path = DICT_INI["FILE_INFO"]["DOWNLOAD_PATH"]
-            up_file = DICT_INI["FILE_INFO"]["CSV_FILE"]
+            up_file = DICT_INI["FILE_INFO"]["EXCEL_FILE"]
 
             # SharePointへのアップロード
             ret = self.clsMsGraph.sys_sharepoint_upload_file(ComDefine.folder_id, up_path + "\\" + up_file, up_file)
@@ -536,7 +588,7 @@ class PROC_SHAREPOINT():
                 logger.error(ret[1])
                 return retbln
 
-            logger.info(f"SharePointに「{up_file}]をアップロードしました。")
+            logger.info(f"SharePointに「{up_file}」をアップロードしました。")
 
             retbln = True
 
@@ -554,16 +606,16 @@ class PROC_SHAREPOINT():
             retbln = False
 
             # SharePoint からダウンロード
-            download_path = DICT_INI["FILE_INFO"]["DOWNLOAD_PATH"] + "\\" + DICT_INI["FILE_INFO"]["CSV_FILE"]
-            ret = self.clsMsGraph.sys_sharepoint_move_file(ComDefine.folder_id, f"{DICT_INI["FILE_INFO"]["CSV_FILE"]}", f"{download_path}")
+            download_path = DICT_INI["FILE_INFO"]["DOWNLOAD_PATH"] + "\\" + DICT_INI["FILE_INFO"]["EXCEL_FILE"]
+            ret = self.clsMsGraph.sys_sharepoint_move_file(ComDefine.folder_id, f"{DICT_INI["FILE_INFO"]["EXCEL_FILE"]}", f"{download_path}")
             sub_rtn = ret[0]
 
             if not sub_rtn:
-                logger.error(f"SharePointから「{DICT_INI["FILE_INFO"]["CSV_FILE"]}」のダウンロードに失敗しました。")
+                logger.error(f"SharePointから「{DICT_INI["FILE_INFO"]["EXCEL_FILE"]}」のダウンロードに失敗しました。")
                 logger.error(ret[1])
                 return retbln
             
-            logger.info(f"SharePointから「{DICT_INI["FILE_INFO"]["CSV_FILE"]}」のダウンロードができました。")
+            logger.info(f"SharePointから「{DICT_INI["FILE_INFO"]["EXCEL_FILE"]}」のダウンロードができました。")
 
             retbln = True
 
@@ -585,7 +637,7 @@ def main():
 
         # ロギングの開始
         if not PROC_HEAD.init_log(): raise
-
+    
         # 引数の入力チェック
         ret_check_argv = PROC_HEAD.check_argv(sys.argv)
         if not ret_check_argv[0]: raise
@@ -593,30 +645,35 @@ def main():
         # INIファイルの読み込み
         if not PROC_HEAD.get_ini(): raise
 
-        if ret_check_argv[1] in ("csv", "up"):
+        if ret_check_argv[1] in ("csv", "excel", "up"):
 
             # CSVファイルの存在チェック
             if not PROC_HEAD.check_csv(): raise
 
-            # CSVファイルから改行コードを削除する
+            # CSVファイル名を変更
             if not PROC_CSVSYORI.update_csv(): raise
 
-        if ret_check_argv[1] in ("up", "down"):
+        if ret_check_argv[1] in ("excel", "up"):
 
+            # CSVファイルをExcelファイルに書き込む
+            if not PROC_EXCELSYORI.create_excel(): raise
+
+        if ret_check_argv[1] in ("up", "down"):
+           
             proc = PROC_SHAREPOINT()
 
             # SharePointへのアクセス処理
             if not proc.get_folder_id(): raise
-        
+            
         match ret_check_argv[1]:
             case "up":
 
                 # SharePointのファイル削除
                 if not proc.delete_files(): raise
-
+    
                 # SharePointへのアップロード
                 if not proc.upload_file(): raise
-        
+                
             case "down":
 
                 # SharePointからのダウンロード
