@@ -22,9 +22,9 @@ import csv
 import logging
 import subprocess
 import msal                                         # Microsoft Authentication Library
-from pprint   import pprint
-from pathlib  import Path
-from openpyxl import Workbook
+from pprint    import pprint
+from pathlib   import Path
+from openpyxl  import Workbook
 
 # 共通関数
 import Common.ComDefine as ComDefine                # グローバル変数の定義
@@ -125,7 +125,7 @@ class PROC_HEAD:
             
             # INIファイルの読み込み
             config = configparser.ConfigParser()
-            config.read(ini_filepath, encoding = "utf-8")
+            config.read(ini_filepath, encoding = "utf-8-sig")
 
             # dictを読み込む
             for key, value in DICT_INI.items():
@@ -145,7 +145,7 @@ class PROC_HEAD:
 
             # INIファイルの読み込み
             config = configparser.ConfigParser()
-            config.read(ini_filepath, encoding = "utf-8")
+            config.read(ini_filepath, encoding = "utf-8-sig")
             
             logger.info(f"「{ini_filepath}」ファイルを読み込みました。")
 
@@ -158,8 +158,8 @@ class PROC_HEAD:
             DICT_INI["SHARE_INFO"]["LM_PATH"]         = config.get('SHARE_INFO', 'LM_PATH')            # SharePontのパス
             DICT_INI["FILE_INFO"]["CSV_FILES"]        = config.get('FILE_INFO', 'CSV_FILES')           # CSVファイルのローカルのアップロード元パス
             DICT_INI["FILE_INFO"]["DOWNLOAD_PATH"]    = config.get('FILE_INFO', 'DOWNLOAD_PATH')       # CSVファイルのローカルのダウンロード先パス
-            DICT_INI["FILE_INFO"]["CSV_FILE"]         = config.get('FILE_INFO', 'CSV_FILE')            # SharePointに保存されるCSVファイル名
-            DICT_INI["FILE_INFO"]["EXCEL_FILE"]       = config.get('FILE_INFO', 'EXCEL_FILE')          # SharePointに保存されるEXCELファイル名
+            DICT_INI["FILE_INFO"]["CSV_FILE"]         = config.get('FILE_INFO', 'CSV_FILE')            # SharePointに保存される CSVファイル名
+            DICT_INI["FILE_INFO"]["EXCEL_FILE"]       = config.get('FILE_INFO', 'EXCEL_FILE')          # SharePointに保存される EXCELファイル名
             
             retbln = True
 
@@ -247,7 +247,7 @@ class PROC_HEAD:
             return retbln
 
     # ログファイルを表示する
-    def disp_log(syori_flg):
+    def disp_log(syori_flg, check_argv):
 
         try:
             retbln = False
@@ -257,7 +257,12 @@ class PROC_HEAD:
             else:
                 logger.info("----- 処理が正常に終了しました。 -----")
 
-            subprocess.Popen(["notepad.exe", ComDefine.log_file])
+            if check_argv == "up":
+                pass
+            else:
+                # 共有Windows Serverではログ表示を止める
+                subprocess.Popen(["notepad.exe", ComDefine.log_file])
+
             retbln = True
 
         except Exception as e:
@@ -685,7 +690,7 @@ def main():
         pass
     finally:
         # ログファイルを表示する
-        PROC_HEAD.disp_log(retbln)
+        PROC_HEAD.disp_log(retbln, ret_check_argv[1])
         return retbln
 
 # メイン処理
