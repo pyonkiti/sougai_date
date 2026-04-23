@@ -21,6 +21,7 @@ import glob
 import csv
 import logging
 import subprocess
+import re
 import msal                                         # Microsoft Authentication Library
 from pprint    import pprint
 from pathlib   import Path
@@ -272,6 +273,46 @@ class PROC_HEAD:
         finally:
             return retbln
 
+    # パターンにマッチしたCSV/Excelファイルを削除
+    def delete_files(file_flg):
+        
+        try:
+            retbln = False
+
+            match file_flg:
+                case "csv":   full_filename = DICT_INI["FILE_INFO"]["CSV_FILE"]
+                case "excel": full_filename = DICT_INI["FILE_INFO"]["EXCEL_FILE"]
+                case _:       
+                    logger.error("パラメータの指定に誤りがあります。")
+                    return retbln
+
+            # ファイル名と拡張子に分割
+            fil_filename, ext_filename = os.path.splitext(full_filename)
+            
+            cnt = 0
+            pattern = re.compile(rf"^{fil_filename}\d+\{ext_filename}$")
+            target_dir = DICT_INI["FILE_INFO"]["DOWNLOAD_PATH"]
+
+            # CSV/Excelファイルをループ
+            for fil in Path(target_dir).glob(f"*{ext_filename}"):
+
+                # パターンマッチ
+                if pattern.match(fil.name):
+                    os.remove(fil)
+                    cnt += 1
+
+            if cnt > 0:
+                logger.info(f"「{DICT_INI["FILE_INFO"]["DOWNLOAD_PATH"]}\\{fil_filename}[001-{cnt:03}]{ext_filename}」を{cnt}件削除しました。")
+            
+            retbln = True
+
+        except Exception as e:
+            msg_err = f"「{__class__.__name__}.{inspect.currentframe().f_code.co_name}で" + "エラーが発生しました。 " + "エラー内容 ： " + f"{e}」"
+            logger.exception(msg_err)
+            traceback.print_exc()
+        finally:
+            return retbln
+
 # ----------------------------------------------------------------------------------------
 # CSVファイルの加工処理
 # ----------------------------------------------------------------------------------------
@@ -300,129 +341,54 @@ class PROC_CSVSYORI():
             traceback.print_exc()
         finally:
             return retbln
-
-    # CSVファイルから改行コードを削除する（没：未使用）
-    def update_csv3():
-        try:
-            retbln = False
-
-            input_csv = ComDefine.csv_file
-            output_csv = DICT_INI["FILE_INFO"]["DOWNLOAD_PATH"] + "\\" + DICT_INI["FILE_INFO"]["CSV_FILE"]
-
-            # w:同名ファイルは上書き
-            with open(input_csv, newline = "", encoding = "utf-8") as infile, \
-                    open(output_csv, "w", newline = "", encoding = "utf-8") as outfile:
-
-                    reader = csv.reader(infile)
-                    writer = csv.writer(outfile, quoting = csv.QUOTE_ALL)
-
-                    # 既存のヘッダーは書き込まない
-                    next(reader, None)
-                    
-                    # カラム統一後のヘッダー
-                    output_header = ["ID","ユーザー名","ユーザーキー","施設名","内容","現象／原因","処置","備考","連絡受付日"]
-                    writer.writerow(output_header)
-
-                    for row in reader:
-
-                        replaced_row = []
-
-                        for cell in row:
-                            replaced_cell = cell.replace("\r\n", "").replace("\n", "").replace("\r", "")
-                            replaced_row.append(replaced_cell)
-
-                        # ユーザー名 ＋ エンドユーザー → ユーザー名に統一
-                        user_name = replaced_row[1].strip() or replaced_row[2].strip()
-
-                        # 施設名 ＋ 機場 → 施設名に統一
-                        shisetu_name = replaced_row[4].strip() or replaced_row[5].strip()
-
-                        replaced_row_new = [replaced_row[0],            # ID
-                                            user_name,                  # ユーザー名
-                                            replaced_row[3],            # ユーザーキー
-                                            shisetu_name,               # 施設名
-                                            *replaced_row[6:]]          # 以降・・・
-
-                        writer.writerow(replaced_row_new)
-
-            logger.info(f"最新のCSVファイルから改行を削除して「{output_csv}」を作成しました。")
-            retbln = True
-
-        except Exception as e:
-            msg_err = f"「{__class__.__name__}.{inspect.currentframe().f_code.co_name}で" + "エラーが発生しました。 " + "エラー内容 ： " + f"{e}」"
-            logger.exception(msg_err)
-            traceback.print_exc()
-        finally:
-            return retbln
         
-    # CSVファイルから改行コードを削除する（データ件数によりファイルを分割して作成する）：未検証：未使用
-    def update_csv2():
+    # CSVファイルを行単位で分割
+    def division_csv():
+        
         try:
             retbln = False
+            
+            input_file = DICT_INI["FILE_INFO"]["DOWNLOAD_PATH"] + "\\" + DICT_INI["FILE_INFO"]["CSV_FILE"]
+            
+            # 元ファイル名（拡張子除く）を取得
+            base_name, ext_name = os.path.splitext(input_file)
 
-            input_csv = ComDefine.csv_file
-            download_path = DICT_INI["FILE_INFO"]["DOWNLOAD_PATH"]
-            csv_file_name = DICT_INI["FILE_INFO"]["CSV_FILE"]
+            # 1ファイル当りの行数（ヘッダ行を含めない）
+            rows_per_file = 19
+                
+            # 障害データ.csvを読み込む
+            with open(input_file, "r", encoding = "utf-8", newline = "") as f:
+                reader = csv.reader(f)
 
-            MAX_ROWS = 200
-            cnt = 1
-            row_count = 0
+                # ヘッダ行を取得
+                header = next(reader)
 
-            outfile = None
-            writer = None
-
-            with open(input_csv, newline = "", encoding = "utf-8") as infile:
-                reader = csv.reader(infile)
-
-                # 既存ヘッダーは読み飛ばす
-                next(reader, None)
+                file_count, row_count = 1, 0
+                out_file, writer      = None, None
 
                 for row in reader:
+                    # 行数のブレイク条件
+                    if row_count % rows_per_file == 0:
 
-                    # {MAX_ROWS}件ごとに新しいファイルを作成
-                    if row_count % MAX_ROWS == 0:
-
-                        if outfile: outfile.close()
+                        if out_file: out_file.close()
                             
-                        output_csv = download_path + "\\" + f"{cnt:02d}" + csv_file_name
-                        outfile = open(output_csv, "w", newline = "", encoding = "utf-8")
+                        # ファイルを新規オープン
+                        out_file = open(f"{base_name}{file_count:03}.csv", "w", encoding = "utf-8-sig", newline = "")
+                        writer = csv.writer(out_file)
 
-                        writer = csv.writer(outfile, quoting = csv.QUOTE_ALL)
+                        # ヘッダを書き込む
+                        writer.writerow(header)
 
-                        # カラム統一後のヘッダー
-                        output_header = ["ID","ユーザー名","ユーザーキー","施設名","内容","現象／原因","処置","備考","連絡受付日"]
-                            
-                        writer.writerow(output_header)
+                        file_count += 1
 
-                        cnt += 1
-
-                    # 改行コード削除
-                    replaced_row = [
-                        cell.replace("\r\n", "").replace("\n", "").replace("\r", "")
-                        for cell in row
-                    ]
-
-                    # ユーザー名 ＋ エンドユーザー → ユーザー名
-                    user_name = replaced_row[1].strip() or replaced_row[2].strip()
-
-                    # 施設名 ＋ 機場 → 施設名
-                    shisetu_name = replaced_row[4].strip() or replaced_row[5].strip()
-
-                    replaced_row_new = [
-                        replaced_row[0],    # ID
-                        user_name,          # ユーザー名
-                        replaced_row[3],    # ユーザーキー
-                        shisetu_name,       # 施設名
-                        *replaced_row[6:]   # 以降
-                    ]
-
-                    writer.writerow(replaced_row_new)
+                    # データ行を書き込む
+                    writer.writerow(row)
                     row_count += 1
 
-            # 最後のファイルをクローズ
-            if outfile: outfile.close()
-                
-            logger.info(f"最新のCSVファイルから改行を削除して「{output_csv}」を作成しました。")
+                # 最終のファイルを閉じる
+                if out_file: out_file.close()
+            
+            logger.info(f"「{base_name}[001-{file_count - 1:03}].csv」を{file_count - 1}件作成しました。")
             retbln = True
 
         except Exception as e:
@@ -477,7 +443,7 @@ class PROC_EXCELSYORI():
             traceback.print_exc()
         finally:
             return retbln
-        
+
 # ----------------------------------------------------------------------------------------
 # SharePointへのアクセス処理
 # ----------------------------------------------------------------------------------------
@@ -546,7 +512,7 @@ class PROC_SHAREPOINT():
             if len(file_list['value']) == 0:
                 logger.info(f"SharePointの中の{DICT_INI["SHARE_INFO"]["LM_PATH"]}フォルダはもともと空です。")
             else:
-                logger.info(f"SharePointの{DICT_INI["SHARE_INFO"]["LM_PATH"]}フォルダには{len(file_list['value'])}個のファイルが存在していました。")
+                logger.info(f"SharePointの{DICT_INI["SHARE_INFO"]["LM_PATH"]}フォルダには{len(file_list['value'])}個のファイルが存在しています。")
                 
                 for cnt, file_info in enumerate(file_list['value'], start = 1):
                     
@@ -564,8 +530,8 @@ class PROC_SHAREPOINT():
                         logger.error(ret[1])
                         return retbln
             
-                    logger.info(f"{cnt}件目 SharePointから「{file_nm}」を削除しました。")
-                    
+                logger.info(f"SharePointからファイルを{cnt}削除しました。")
+                
             retbln = True
 
         except Exception as e:
@@ -581,20 +547,30 @@ class PROC_SHAREPOINT():
         try:
             retbln = False
 
-            up_path = DICT_INI["FILE_INFO"]["DOWNLOAD_PATH"]
-            up_file = DICT_INI["FILE_INFO"]["EXCEL_FILE"]
+            # ファイル名と拡張子に分割
+            fil_filename, ext_filename = os.path.splitext(DICT_INI["FILE_INFO"]["CSV_FILE"])
+            
+            cnt = 0
+            pattern = re.compile(rf"^{fil_filename}\d+\{ext_filename}$")
+            target_dir = DICT_INI["FILE_INFO"]["DOWNLOAD_PATH"]
 
-            # SharePointへのアップロード
-            ret = self.clsMsGraph.sys_sharepoint_upload_file(ComDefine.folder_id, up_path + "\\" + up_file, up_file)
-            sub_rtn = ret[0]
+            # CSVファイルをループ
+            for fil in Path(target_dir).glob(f"*{ext_filename}"):
 
-            if not sub_rtn:
-                logger.error("SharePointへのアップロードに失敗しました。")
-                logger.error(ret[1])
-                return retbln
+                # パターンマッチ
+                if pattern.match(fil.name):
+                    cnt += 1
+           
+                    # SharePointへのアップロード
+                    ret = self.clsMsGraph.sys_sharepoint_upload_file(ComDefine.folder_id, target_dir + "\\" + fil.name, fil.name)
+                    sub_rtn = ret[0]
 
-            logger.info(f"SharePointに「{up_file}」をアップロードしました。")
+                    if not sub_rtn:
+                        logger.error(f"{fil.name}のSharePointへのアップロードで失敗しました。")
+                        logger.error(ret[1])
+                        return retbln
 
+            logger.info(f"SharePointに{fil_filename}[001-{cnt:03}]{ext_filename}を{cnt}件アップロードしました。")
             retbln = True
 
         except Exception as e:
@@ -604,23 +580,43 @@ class PROC_SHAREPOINT():
         finally:
             return retbln
 
-    # SharePontからのダウンロード
-    def download_file(self):
+    # SharePontからのダウンロード（障害データ[999].csv：複数件）
+    def download_files(self):
 
         try:
             retbln = False
 
-            # SharePoint からダウンロード
-            download_path = DICT_INI["FILE_INFO"]["DOWNLOAD_PATH"] + "\\" + DICT_INI["FILE_INFO"]["EXCEL_FILE"]
-            ret = self.clsMsGraph.sys_sharepoint_move_file(ComDefine.folder_id, f"{DICT_INI["FILE_INFO"]["EXCEL_FILE"]}", f"{download_path}")
-            sub_rtn = ret[0]
+            # SharePointのファイルの一覧を取得
+            ret = self.clsMsGraph.sys_sharepoint_get_filelist(ComDefine.folder_id)
+            file_list = ret[0]
 
-            if not sub_rtn:
-                logger.error(f"SharePointから「{DICT_INI["FILE_INFO"]["EXCEL_FILE"]}」のダウンロードに失敗しました。")
+            if not file_list:
+                logger.error("SharePointのファイルの一覧の取得に失敗しました。")
                 logger.error(ret[1])
                 return retbln
             
-            logger.info(f"SharePointから「{DICT_INI["FILE_INFO"]["EXCEL_FILE"]}」のダウンロードができました。")
+            if len(file_list['value']) == 0:
+                logger.info(f"SharePointの中の{DICT_INI["SHARE_INFO"]["LM_PATH"]}ダウンロードできるフォルダがありません。")
+            else:
+                logger.info(f"SharePointの{DICT_INI["SHARE_INFO"]["LM_PATH"]}フォルダには{len(file_list['value'])}個のファイルが存在しています。")
+                
+                for cnt, file_info in enumerate(file_list['value'], start = 1):
+                    
+                    # ファイル以外は除外
+                    if file_info.get('file') == None: continue
+                        
+                    download_path = DICT_INI["FILE_INFO"]["DOWNLOAD_PATH"] + "\\" + file_info['name']
+                    
+                    # SharePoint からダウンロード
+                    ret = self.clsMsGraph.sys_sharepoint_move_file(ComDefine.folder_id, file_info['name'], download_path)
+                    sub_rtn = ret[0]
+
+                    if not sub_rtn:
+                        logger.error(f"SharePointから「{file_info['name']}」のダウンロードに失敗しました。")
+                        logger.error(ret[1])
+                        return retbln
+
+            logger.info(f"SharePointの「{DICT_INI["SHARE_INFO"]["LM_PATH"]}」から{cnt}件のファイルをダウンロードしました。")
 
             retbln = True
 
@@ -630,7 +626,6 @@ class PROC_SHAREPOINT():
             traceback.print_exc()
         finally:
             return retbln
-
 # ----------------------------------------------------------------------------------------
 # メイン処理
 # ----------------------------------------------------------------------------------------
@@ -657,11 +652,19 @@ def main():
 
             # CSVファイル名を変更
             if not PROC_CSVSYORI.update_csv(): raise
-
-        if ret_check_argv[1] in ("excel", "up"):
+            
+        if ret_check_argv[1] in ("excel"):
 
             # CSVファイルをExcelファイルに書き込む
             if not PROC_EXCELSYORI.create_excel(): raise
+
+        if ret_check_argv[1] in ("up"):
+
+            # 障害データ01～99.csvファイルを削除
+            if not PROC_HEAD.delete_files("csv"): raise
+            
+            # CSVファイルを19行単位で分割
+            if not PROC_CSVSYORI.division_csv(): raise
 
         if ret_check_argv[1] in ("up", "down"):
            
@@ -682,7 +685,7 @@ def main():
             case "down":
 
                 # SharePointからのダウンロード
-                if not proc.download_file(): raise
+                if not proc.download_files(): raise
 
         retbln = True
         
